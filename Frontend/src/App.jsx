@@ -5,13 +5,19 @@ import Dashboard from './components/dashboard.jsx'
 import Register from './components/register.jsx'
 import UserProtectWrapper from './components/UserProtectWrapper.jsx'
 import Home from './components/home.jsx'
+import VerifyOtp from './components/VerifyOtp.jsx'
+import ForgotPassword from './components/forgotPassword.jsx'
+import ResetPassword from './components/resetPassword.jsx'
 
 const App = () => {
   return (
     <Routes>
-      <Route path="/home" element={<Home />} />
+      <Route path="/" element={<Home />} />
       <Route path="/login" element={<Login />} />
       <Route path='/register' element={<Register/>} /> 
+      <Route path='/forgotPassword' element={<ForgotPassword/>} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
+      <Route path="/verify-otp" element={<VerifyOtp />} />
       <Route path="/dashboard" element={
         <UserProtectWrapper>
           <Dashboard />

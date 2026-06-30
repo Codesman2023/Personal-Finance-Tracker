@@ -23,7 +23,7 @@ const Login = () => {
 
     const response = await axios.post(
       `${import.meta.env.VITE_BASE_URL}/user/login`,
-      userData
+      userData,
     );
 
     if (response.status === 200) {
@@ -45,7 +45,10 @@ const Login = () => {
         transition={{ duration: 0.6 }}
         className="w-full absolute top-0 left-0 p-4 bg-blue-600 text-white shadow-md flex items-center justify-between px-6"
       >
-        <Link to="/home" className="text-white text-xl md:text-2xl hover:text-gray-200 transition">
+        <Link
+          to="/"
+          className="text-white text-xl md:text-2xl hover:text-gray-200 transition"
+        >
           <FaHome />
         </Link>
         <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-2">
@@ -126,6 +129,12 @@ const Login = () => {
             <Link to={"/register"}>Sign Up</Link>
           </button>
         </motion.div>
+        <Link
+          to={"/forgotPassword"}
+          className="text-blue-500 flex justify-center text-sm hover:underline"
+        >
+          Forgot Password
+        </Link>
       </motion.div>
     </div>
   );

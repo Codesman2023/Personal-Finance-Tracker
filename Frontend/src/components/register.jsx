@@ -1,7 +1,6 @@
-import React, { useState, useContext } from "react";
+import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { UserDataContext } from "../context/UserContext";
 import { FaPiggyBank, FaHome } from "react-icons/fa";
 import { motion } from "framer-motion";
 
@@ -10,12 +9,14 @@ const Register = () => {
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
-
-  const { setUser } = useContext(UserDataContext);
 
   const submitHandler = async (e) => {
     e.preventDefault();
+    setError("");
+    setIsSubmitting(true);
 
     const newUser = {
       fullname: {
@@ -26,22 +27,30 @@ const Register = () => {
       password: password,
     };
 
-    const response = await axios.post(
-      `${import.meta.env.VITE_BASE_URL}/user/register`,
-      newUser
-    );
+    try {
+      const response = await axios.post(
+        `${import.meta.env.VITE_BASE_URL}/user/register`,
+        newUser
+      );
 
-    if (response.status === 201) {
-      const data = response.data;
-      localStorage.setItem("token", data.token);
-      setUser(data.user);
-      navigate("/dashboard");
+      if (response.status === 201) {
+        navigate("/verify-otp", { state: { email } });
+      }
+
+      setEmail("");
+      setFirstName("");
+      setLastName("");
+      setPassword("");
+    } catch (error) {
+      const validationError = error.response?.data?.errors?.[0]?.msg;
+      setError(
+        validationError ||
+          error.response?.data?.message ||
+          "Unable to register. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setEmail("");
-    setFirstName("");
-    setLastName("");
-    setPassword("");
   };
 
   return (
@@ -61,7 +70,7 @@ const Register = () => {
       {/* Header */}
       <header className="w-full absolute top-0 left-0 p-4 bg-blue-600 text-white shadow-md flex items-center justify-between px-6 z-10">
         <Link
-          to="/home"
+          to="/"
           className="text-white text-xl md:text-2xl hover:text-gray-200 transition"
         >
           <FaHome />
@@ -122,13 +131,16 @@ const Register = () => {
             </motion.div>
           ))}
 
+          {error && <p className="text-sm text-center text-red-600">{error}</p>}
+
           <motion.button
             type="submit"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg font-semibold transition duration-200"
+            disabled={isSubmitting}
+            whileHover={{ scale: isSubmitting ? 1 : 1.05 }}
+            whileTap={{ scale: isSubmitting ? 1 : 0.95 }}
+            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white py-2 rounded-lg font-semibold transition duration-200"
           >
-            Register
+            {isSubmitting ? "Registering..." : "Register"}
           </motion.button>
         </form>
 

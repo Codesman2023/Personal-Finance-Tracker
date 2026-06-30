@@ -13,6 +13,18 @@ router.post('/register', [
     userController.registerUser
 );
 
+router.post('/verify-otp', [
+    body('email').isEmail().withMessage('Please enter a valid email address.'),
+    body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits.')
+],
+    userController.verifyOtp
+);
+
+router.post('/resend-otp', [
+    body('email').isEmail().withMessage('Please enter a valid email address.')
+],
+    userController.resendOtp
+);
 
 router.post('/login', [
     body('email').isEmail().withMessage('Please enter a valid email address.'),
@@ -21,8 +33,21 @@ router.post('/login', [
     userController.loginUser
 );
 
-
 router.get('/dashboard', authMiddleware.authUser, userController.getUserProfile);
+
+router.put('/budget', authMiddleware.authUser, userController.updateBudgetSettings);
+
+router.post(
+  "/forgot-password",
+  [body("email").isEmail().withMessage("Please enter a valid email address.")],
+  userController.forgotPassword
+);
+
+router.post(
+  "/reset-password/:token",
+  [body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters long.")],
+  userController.resetPassword
+);
 
 router.get('/logout', authMiddleware.authUser, userController.logoutUser);
 

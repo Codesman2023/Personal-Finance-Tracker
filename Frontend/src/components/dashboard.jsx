@@ -1,343 +1,478 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import API from "../utils/axios";
+import ChartSection from "../Parts/ChartSection";
 import { UserDataContext } from "../context/UserContext";
+import CategoryManager from "./dashboard/CategoryManager";
+import DashboardHeader from "./dashboard/DashboardHeader";
+import InsightsPanel from "./dashboard/InsightsPanel";
+import SummaryCards from "./dashboard/SummaryCards";
+import TransactionFilters from "./dashboard/TransactionFilters";
+import TransactionForm from "./dashboard/TransactionForm";
+import TransactionList from "./dashboard/TransactionList";
+import BudgetPanel from "./dashboard/BudgetPanel";
 import {
-  getTransactions,
+  getCategoriesByType,
+  mergeCategories,
+  normalizeCategoryName,
+} from "./dashboard/categories";
+import {
   createTransaction,
   deleteTransaction,
+  getTransactions,
+  sendMonthlyReportEmail,
   updateTransaction,
 } from "../utils/api.transaction";
-import { useNavigate } from "react-router-dom";
-import ChartSection from "../Parts/ChartSection";
-import axios from "axios";
-import { motion } from "framer-motion";
+import { updateBudgetSettings } from "../utils/api.user";
 
+const today = new Date().toISOString().slice(0, 10);
 const currentMonth = new Date().getMonth();
 const currentYear = new Date().getFullYear();
 
+const initialForm = {
+  title: "",
+  amount: "",
+  type: "income",
+  category: "Salary",
+  date: today,
+  isRecurring: false,
+  frequency: "monthly",
+};
+
+const categoryStorageKey = "finance-tracker-categories";
+
 export default function Dashboard() {
-  const { user } = useContext(UserDataContext);
+  const { user, setUser } = useContext(UserDataContext);
+  const navigate = useNavigate();
   const [transactions, setTransactions] = useState([]);
   const [filter, setFilter] = useState("all");
-  const [form, setForm] = useState({ title: "", amount: "", type: "income" });
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [form, setForm] = useState(initialForm);
   const [editId, setEditId] = useState(null);
-  const [editForm, setEditForm] = useState({ title: "", amount: "", type: "" });
+  const [editForm, setEditForm] = useState(initialForm);
+  const [categories, setCategories] = useState(() => {
+    const savedCategories = JSON.parse(
+      localStorage.getItem(categoryStorageKey) || "{}",
+    );
+    return mergeCategories(savedCategories);
+  });
+  const [newCategory, setNewCategory] = useState({ type: "expense", name: "" });
   const [budgetLimit, setBudgetLimit] = useState(30000);
-  const [UserName, setUserName] = useState("");
+  const [budgetMessage, setBudgetMessage] = useState("");
+  const [isBudgetSaving, setIsBudgetSaving] = useState(false);
+  const [isReportSending, setIsReportSending] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const navigate = useNavigate();
+  // API helper wrappers (use `API` which attaches token dynamically)
+  const getTransactions = async () => await API.get(`/transactions`);
+  const createTransaction = async (payload) =>
+    await API.post(`/transactions`, payload);
+  const updateTransaction = async (id, payload) =>
+    (await API.put(`/transactions/${id}`, payload)).data;
+  const deleteTransaction = async (id) =>
+    (await API.delete(`/transactions/${id}`)).data;
+  const sendMonthlyReportEmail = async () =>
+    await API.post(`/transactions/monthly-report`);
+  const updateBudgetSettings = async (monthlyBudgetLimit) =>
+    await API.put(`/user/budget`, { monthlyBudgetLimit });
 
   useEffect(() => {
-    const fetchUser = async () => {
-      const token = localStorage.getItem("token");
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
+    const fetchDashboardData = async () => {
       try {
-        const res = await axios.get(
-          `${import.meta.env.VITE_BASE_URL}/user/dashboard`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (res.data && res.data.user && res.data.user.Fullname) {
-          setUserName(
-            `${res.data.user.Fullname.firstname} ${res.data.user.Fullname.lastname}`
-          );
+        const [profileResponse, transactionResponse] = await Promise.all([
+          API.get(`/user/dashboard`),
+          getTransactions(),
+        ]);
+
+        setUser(profileResponse.data);
+        setBudgetLimit(profileResponse.data.monthlyBudgetLimit ?? 30000);
+        setTransactions(transactionResponse.data);
+      } catch (err) {
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          localStorage.removeItem("token");
+          navigate("/login");
+          return;
         }
-      } catch (err) {
-        setUserName("");
+
+        setError("Unable to load dashboard data. Please log in again.");
+      } finally {
+        setIsLoading(false);
       }
     };
-    fetchUser();
-  }, []);
+
+    fetchDashboardData();
+  }, [navigate, setUser]);
 
   useEffect(() => {
-    if (!user) navigate("/login");
-  }, [user, navigate]);
+    if (!transactions.length) return;
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const response = await getTransactions(user.token);
-        setTransactions(response.data);
-      } catch (err) {
-        alert("Failed to fetch transactions");
+    setCategories((currentCategories) => {
+      const nextCategories = { ...currentCategories };
+      let changed = false;
+
+      transactions.forEach((tx) => {
+        if (!tx.category || !tx.type || !nextCategories[tx.type]) return;
+
+        if (!nextCategories[tx.type].includes(tx.category)) {
+          nextCategories[tx.type] = [...nextCategories[tx.type], tx.category];
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        localStorage.setItem(
+          categoryStorageKey,
+          JSON.stringify(nextCategories),
+        );
       }
-    };
-    fetchData();
+
+      return changed ? nextCategories : currentCategories;
+    });
+  }, [transactions]);
+
+  const userName = useMemo(() => {
+    const firstName =
+      user?.fullname?.firstname || user?.FullName?.firstName || "";
+    const lastName = user?.fullname?.lastname || user?.FullName?.lastName || "";
+    return `${firstName} ${lastName}`.trim();
   }, [user]);
+
+  const totals = useMemo(() => {
+    const income = transactions
+      .filter((tx) => tx.type === "income")
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+    const expense = transactions
+      .filter((tx) => tx.type === "expense")
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+    return {
+      income,
+      expense,
+      balance: income - expense,
+      savingsRate:
+        income > 0 ? Math.round(((income - expense) / income) * 100) : 0,
+    };
+  }, [transactions]);
+
+  const monthlyExpense = useMemo(
+    () =>
+      transactions
+        .filter((tx) => {
+          const txDate = new Date(tx.date || tx.createdAt);
+          return (
+            tx.type === "expense" &&
+            txDate.getMonth() === currentMonth &&
+            txDate.getFullYear() === currentYear
+          );
+        })
+        .reduce((sum, tx) => sum + Number(tx.amount), 0),
+    [transactions],
+  );
+
+  const filteredTransactions = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return transactions.filter((tx) => {
+      const matchesType = filter === "all" || tx.type === filter;
+      const matchesCategory =
+        categoryFilter === "all" || tx.category === categoryFilter;
+      const matchesSearch =
+        !query ||
+        tx.title?.toLowerCase().includes(query) ||
+        tx.category?.toLowerCase().includes(query);
+
+      return matchesType && matchesCategory && matchesSearch;
+    });
+  }, [categoryFilter, filter, search, transactions]);
+
+  const categoryFilterOptions = useMemo(() => {
+    if (filter !== "all") {
+      return getCategoriesByType(categories, filter);
+    }
+
+    return Array.from(new Set([...categories.income, ...categories.expense]));
+  }, [categories, filter]);
+
+  const highestExpense = useMemo(
+    () =>
+      transactions
+        .filter((tx) => tx.type === "expense")
+        .sort((a, b) => Number(b.amount) - Number(a.amount))[0],
+    [transactions],
+  );
+
+  const latestTransaction = transactions[0];
+
+  const handleFormChange = (e) => {
+    const { name, value, type, checked } = e.target;
+
+    if (name === "type") {
+      setForm({
+        ...form,
+        type: value,
+        category: getCategoriesByType(categories, value)[0] || "General",
+      });
+      return;
+    }
+
+    if (type === "checkbox") {
+      setForm({ ...form, [name]: checked });
+      return;
+    }
+
+    setForm({ ...form, [name]: value });
+  };
+
+  const handleNewCategoryChange = (e) => {
+    setNewCategory({ ...newCategory, [e.target.name]: e.target.value });
+  };
+
+  const handleAddCategory = (e) => {
+    e.preventDefault();
+    const categoryName = normalizeCategoryName(newCategory.name);
+
+    if (!categoryName) {
+      setError("Category name is required.");
+      return;
+    }
+
+    if (
+      getCategoriesByType(categories, newCategory.type).includes(categoryName)
+    ) {
+      setError("Category already exists.");
+      return;
+    }
+
+    const nextCategories = {
+      ...categories,
+      [newCategory.type]: [...categories[newCategory.type], categoryName],
+    };
+
+    setCategories(nextCategories);
+    localStorage.setItem(categoryStorageKey, JSON.stringify(nextCategories));
+    setForm({ ...form, type: newCategory.type, category: categoryName });
+    setNewCategory({ ...newCategory, name: "" });
+    setError("");
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
+
     try {
-      const newTx = await createTransaction(form, user.token);
-      setTransactions([...transactions, newTx]);
-      setForm({ title: "", amount: "", type: "income" });
+      const response = await createTransaction({
+        ...form,
+        amount: Number(form.amount),
+      });
+      setTransactions([response.data, ...transactions]);
+      setForm(initialForm);
     } catch (err) {
-      alert("Failed to add transaction");
+      setError("Failed to add transaction.");
     }
   };
 
   const handleEditClick = (tx) => {
     setEditId(tx._id);
-    setEditForm({ title: tx.title, amount: tx.amount, type: tx.type });
+    setEditForm({
+      title: tx.title,
+      amount: tx.amount,
+      type: tx.type,
+      category: tx.category || "General",
+      date: tx.date || tx.createdAt,
+      isRecurring: tx.isRecurring || false,
+      frequency: tx.frequency || "monthly",
+    });
   };
 
   const handleEditChange = (e) => {
-    setEditForm({ ...editForm, [e.target.name]: e.target.value });
+    const { name, value, type, checked } = e.target;
+
+    if (name === "type") {
+      setEditForm({
+        ...editForm,
+        type: value,
+        category: getCategoriesByType(categories, value)[0] || "General",
+      });
+      return;
+    }
+
+    if (type === "checkbox") {
+      setEditForm({ ...editForm, [name]: checked });
+      return;
+    }
+
+    setEditForm({ ...editForm, [name]: value });
   };
 
   const handleUpdate = async (id) => {
+    setError("");
+
     try {
-      const updated = await updateTransaction(id, editForm, user.token);
+      const updated = await updateTransaction(id, {
+        ...editForm,
+        amount: Number(editForm.amount),
+      });
       setTransactions(transactions.map((tx) => (tx._id === id ? updated : tx)));
       setEditId(null);
     } catch (err) {
-      alert("Update failed");
+      setError("Update failed.");
     }
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure?")) return;
+    if (!window.confirm("Delete this transaction?")) return;
+    setError("");
+
     try {
-      await deleteTransaction(id, user.token);
+      await deleteTransaction(id);
       setTransactions(transactions.filter((tx) => tx._id !== id));
     } catch (err) {
-      alert("Delete failed");
+      setError("Delete failed.");
     }
   };
 
-  const incomeTotal = transactions
-    .filter((tx) => tx.type === "income")
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
+  const handleBudgetSave = async () => {
+    setError("");
+    setBudgetMessage("");
+    setIsBudgetSaving(true);
 
-  const expenseTotal = transactions
-    .filter((tx) => tx.type === "expense")
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
+    try {
+      const response = await updateBudgetSettings(budgetLimit);
+      setBudgetLimit(response.data.monthlyBudgetLimit);
+      setBudgetMessage("Budget saved. Email alerts will use this limit.");
+    } catch (err) {
+      setError("Failed to save budget settings.");
+    } finally {
+      setIsBudgetSaving(false);
+    }
+  };
 
-  const balance = incomeTotal - expenseTotal;
+  const handleMonthlyReportEmail = async () => {
+    setError("");
+    setBudgetMessage("");
+    setIsReportSending(true);
 
-  const filteredTxs = transactions.filter((tx) =>
-    filter === "all" ? true : tx.type === filter
-  );
-
-  const monthlyExpense = transactions
-    .filter((tx) => {
-      const txDate = new Date(tx.date);
-      return (
-        tx.type === "expense" &&
-        txDate.getMonth() === currentMonth &&
-        txDate.getFullYear() === currentYear
+    try {
+      const response = await sendMonthlyReportEmail();
+      setBudgetMessage(
+        response.data.message || "Monthly report sent to your email.",
       );
-    })
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
+    } catch (err) {
+      setError("Failed to send monthly report email.");
+    } finally {
+      setIsReportSending(false);
+    }
+  };
 
   const handleLogout = () => {
     localStorage.removeItem("token");
     navigate("/login");
   };
 
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.6 }}
-      className="max-w-6xl mx-auto px-6 py-8"
-    >
-      <motion.div
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.6 }}
-        className="bg-gradient-to-br from-blue-50 to-purple-100 rounded-2xl p-6 shadow-lg"
-      >
-        <header className="flex flex-col md:flex-row md:justify-between md:items-center mb-6 gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800">
-              Hi,{" "}
-              <motion.span
-                animate={{ color: ["#9333ea", "#2563eb", "#9333ea"] }}
-                transition={{ repeat: Infinity, duration: 4 }}
-              >
-                {UserName || "User"}
-              </motion.span>
-            </h1>
-            <p className="text-gray-600 mt-1">Here’s your financial overview</p>
-          </div>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleLogout}
-            className="bg-red-500 text-white px-6 py-2 rounded-xl hover:bg-red-600 transition cursor-pointer"
-          >
-            Logout
-          </motion.button>
-        </header>
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-gray-100 p-6">
+        <div className="mx-auto max-w-7xl rounded-lg border border-gray-200 bg-white p-8 text-gray-600 shadow-sm">
+          Loading your finance dashboard...
+        </div>
+      </main>
+    );
+  }
 
-        {monthlyExpense > budgetLimit && (
-          <motion.div
-            initial={{ x: -50, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            className="bg-red-100 text-red-700 p-4 mb-6 rounded-xl font-semibold border border-red-300"
-          >
-            🚨 You’ve exceeded your monthly budget of ₹{budgetLimit}!
-          </motion.div>
+  return (
+    <main className="min-h-screen bg-gray-100 text-gray-950">
+      <DashboardHeader userName={userName} onLogout={handleLogout} />
+
+      <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6 md:px-8">
+        {error && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+            {error}
+          </div>
         )}
 
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          {[
-            { label: "Income", value: `₹${incomeTotal}`, color: "text-green-600" },
-            { label: "Expense", value: `₹${expenseTotal}`, color: "text-red-600" },
-            { label: "Balance", value: `₹${balance}`, color: "text-blue-600" },
-          ].map((card, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: i * 0.2 }}
-              whileHover={{ scale: 1.05 }}
-              className="bg-white p-4 rounded-xl shadow-md"
-            >
-              <p className="text-gray-500 text-sm">{card.label}</p>
-              <p className={`${card.color} text-2xl font-bold`}>{card.value}</p>
-            </motion.div>
-          ))}
+        <SummaryCards
+          income={totals.income}
+          expense={totals.expense}
+          balance={totals.balance}
+        />
+
+        <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
+          <div className="flex flex-col gap-5">
+            <TransactionForm
+              form={form}
+              categories={categories}
+              onChange={handleFormChange}
+              onSubmit={handleSubmit}
+            />
+            <ChartSection transactions={transactions} />
+          </div>
+
+          <div className="flex flex-col gap-5">
+            
+            <CategoryManager
+              categories={categories}
+              newCategory={newCategory}
+              onNewCategoryChange={handleNewCategoryChange}
+              onAddCategory={handleAddCategory}
+            />
+            
+          <BudgetPanel
+            budgetLimit={budgetLimit}
+            monthlyExpense={monthlyExpense}
+            onBudgetChange={setBudgetLimit}
+            onBudgetSave={handleBudgetSave}
+            onMonthlyReportEmail={handleMonthlyReportEmail}
+            isBudgetSaving={isBudgetSaving}
+            isReportSending={isReportSending}
+            message={budgetMessage}
+          />
+            <InsightsPanel
+              highestExpense={highestExpense}
+              latestTransaction={latestTransaction}
+              savingsRate={totals.savingsRate}
+            />
+          </div>
+          
         </div>
 
-        <div className="flex flex-wrap gap-4 items-center mb-6">
-          <label className="font-semibold">Monthly Budget:</label>
-          <input
-            type="number"
-            value={budgetLimit}
-            onChange={(e) => setBudgetLimit(Number(e.target.value))}
-            className="px-4 py-2 border border-gray-300 rounded-lg"
+        <section className="overflow-hidden rounded-lg border border-gray-200 shadow-sm">
+          <TransactionFilters
+            filter={filter}
+            categoryFilter={categoryFilter}
+            categoryOptions={categoryFilterOptions}
+            search={search}
+            onFilterChange={(value) => {
+              setFilter(value);
+              setCategoryFilter("all");
+            }}
+            onCategoryFilterChange={setCategoryFilter}
+            onSearchChange={setSearch}
           />
-          <label className="font-semibold ml-4">Filter:</label>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg"
-          >
-            <option value="all">All</option>
-            <option value="income">Income</option>
-            <option value="expense">Expense</option>
-          </select>
-        </div>
-
-        <form
-          onSubmit={handleSubmit}
-          className="grid md:grid-cols-4 gap-4 mb-6"
-        >
-          <input
-            name="title"
-            placeholder="Transaction title"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            required
-            className="px-4 py-2 border border-gray-300 rounded-lg"
+          <TransactionList
+            transactions={filteredTransactions}
+            editId={editId}
+            editForm={editForm}
+            categories={categories}
+            onEditClick={handleEditClick}
+            onEditChange={handleEditChange}
+            onUpdate={handleUpdate}
+            onCancelEdit={() => setEditId(null)}
+            onDelete={handleDelete}
           />
-          <input
-            name="amount"
-            type="number"
-            placeholder="Amount"
-            value={form.amount}
-            onChange={(e) => setForm({ ...form, amount: e.target.value })}
-            required
-            className="px-4 py-2 border border-gray-300 rounded-lg"
-          />
-          <select
-            name="type"
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-            className="px-4 py-2 border border-gray-300 rounded-lg"
-          >
-            <option value="income">Income</option>
-            <option value="expense">Expense</option>
-          </select>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            type="submit"
-            className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition"
-          >
-            Add Transaction
-          </motion.button>
-        </form>
-
-        <ChartSection transactions={transactions} />
-
-        <motion.div
-          layout
-          className="mt-8 space-y-4"
-        >
-            {filteredTxs.map((tx) => (
-              <motion.div
-                key={tx._id}
-                layout
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.4 }}
-                className={`p-4 rounded-xl shadow-md flex justify-between items-center ${
-                  tx.type === "income" ? "bg-green-50" : "bg-red-50"
-                }`}
-              >
-                {editId === tx._id ? (
-                  <div className="flex flex-wrap gap-3 items-center w-full">
-                    <input
-                      name="title"
-                      value={editForm.title}
-                      onChange={handleEditChange}
-                      className="px-3 py-1 border border-gray-300 rounded-md"
-                    />
-                    <input
-                      name="amount"
-                      type="number"
-                      value={editForm.amount}
-                      onChange={handleEditChange}
-                      className="px-3 py-1 border border-gray-300 rounded-md"
-                    />
-                    <select
-                      name="type"
-                      value={editForm.type}
-                      onChange={handleEditChange}
-                      className="px-3 py-1 border border-gray-300 rounded-md"
-                    >
-                      <option value="income">Income</option>
-                      <option value="expense">Expense</option>
-                    </select>
-                    <button
-                      onClick={() => handleUpdate(tx._id)}
-                      className="bg-blue-500 text-white px-4 py-1 rounded-md"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => setEditId(null)}
-                      className="bg-gray-300 px-4 py-1 rounded-md"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex justify-between items-center w-full">
-                    <span className="text-gray-700">
-                      <strong>{tx.title}</strong> — ₹{tx.amount} ({tx.type})
-                    </span>
-                    <div className="space-x-2">
-                      <button
-                        onClick={() => handleEditClick(tx)}
-                        className="text-blue-500 hover:underline"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(tx._id)}
-                        className="text-red-500 hover:underline"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </motion.div>
-            ))}
-        </motion.div>
-      </motion.div>
-    </motion.div>
+        </section>
+      </div>
+    </main>
   );
 }

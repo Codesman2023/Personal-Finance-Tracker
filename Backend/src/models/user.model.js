@@ -26,6 +26,29 @@ const userSchema = new mongoose.Schema({
         required: true,
         select: false,
     },
+    isVerified: {
+        type: Boolean,
+        default: false,
+    },
+    otp: {
+        type: String,
+        select: false,
+    },
+    otpExpires: {
+        type: Date,
+        select: false,
+    },
+    monthlyBudget: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    lastBudgetAlertMonth: {
+        type: String,
+        default: "",
+    },
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
 })
 
 
@@ -36,6 +59,22 @@ userSchema.methods.generateAuthToken = function () {
 
 userSchema.methods.comparePassword = async function (password) {
     return await bcrypt.compare(password, this.password);
+}
+
+userSchema.methods.generateOtp = async function () {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    this.otp = await bcrypt.hash(otp, 10);
+    this.otpExpires = Date.now() + 10 * 60 * 1000;
+    await this.save();
+    return otp;
+}
+
+userSchema.methods.verifyOtp = async function (otp) {
+    if (!this.otp || !this.otpExpires || this.otpExpires < Date.now()) {
+        return false;
+    }
+
+    return await bcrypt.compare(otp, this.otp);
 }
 
 userSchema.statics.hashPassword = async function (password) {
