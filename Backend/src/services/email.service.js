@@ -6,7 +6,7 @@ const createTransporter = () => {
   }
 
   return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || "smtp.gmail.com",
+    host: process.env.EMAIL_HOST || "smtp-relay.brevo.com",
     port: Number(process.env.EMAIL_PORT) || 587,
     secure: Number(process.env.EMAIL_PORT) === 465,
     family: 4,
