@@ -5,7 +5,8 @@ const createTransporter = () => {
     throw new Error("Email credentials are not configured");
   }
 
-  return nodemailer.createTransport({
+const createTransporter = () => {
+  const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST || "smtp-relay.brevo.com",
     port: Number(process.env.EMAIL_PORT) || 587,
     secure: Number(process.env.EMAIL_PORT) === 465,
@@ -15,6 +16,16 @@ const createTransporter = () => {
       pass: process.env.EMAIL_PASSWORD,
     },
   });
+
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error("SMTP Verify Error:", error);
+    } else {
+      console.log("✅ SMTP server is ready");
+    }
+  });
+
+  return transporter;
 };
 
 module.exports.sendOtpEmail = async (email, otp) => {
