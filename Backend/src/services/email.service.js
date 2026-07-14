@@ -1,26 +1,45 @@
-const nodemailer = require("nodemailer");
+const axios = require("axios");
 
-const createTransporter = () => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    throw new Error("Email credentials are not configured");
+const sendBrevoEmail = async ({ to, subject, text, html }) => {
+  const fromName = process.env.BREVO_FROM_NAME || "Finance Tracker";
+  const fromEmail = process.env.BREVO_FROM_EMAIL;
+
+  if (!process.env.BREVO_API_KEY) {
+    throw new Error("BREVO_API_KEY is not set");
+  }
+  if (!fromEmail) {
+    throw new Error("BREVO_FROM_EMAIL is not set");
   }
 
- return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || "smtp-relay.brevo.com",
-    port: Number(process.env.EMAIL_PORT) || 587,
-    secure: Number(process.env.EMAIL_PORT) === 465,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
-    },
-  });
+  try {
+    await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: to }],
+        subject,
+        textContent: text,
+        htmlContent: html,
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json",
+        },
+        timeout: 10000, // fail fast instead of hanging
+      }
+    );
+  } catch (err) {
+    const brevoMessage = err.response?.data?.message;
+    const status = err.response?.status;
+    throw new Error(
+      `Brevo API error${status ? ` (${status})` : ""}: ${brevoMessage || err.message}`
+    );
+  }
 };
 
 module.exports.sendOtpEmail = async (email, otp) => {
-  const transporter = createTransporter();
-
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+  await sendBrevoEmail({
     to: email,
     subject: "Verify your Personal Finance Tracker account",
     text: `Your OTP is ${otp}. It expires in 10 minutes.`,
@@ -35,10 +54,7 @@ module.exports.sendOtpEmail = async (email, otp) => {
 };
 
 module.exports.sendBudgetAlertEmail = async (email, budget) => {
-  const transporter = createTransporter();
-
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+  await sendBrevoEmail({
     to: email,
     subject: "Budget Alert: You have exceeded your monthly budget",
     text: `You have exceeded your monthly budget of ${budget}. Please review your expenses.`,
@@ -52,13 +68,11 @@ module.exports.sendBudgetAlertEmail = async (email, budget) => {
 };
 
 module.exports.sendMonthlyReportEmail = async (email, report) => {
-  const transporter = createTransporter();
   const categories = report.categoryBreakdown
     .map((item) => `<li><strong>${item.category}</strong>: ${item.amount}</li>`)
     .join("");
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+  await sendBrevoEmail({
     to: email,
     subject: `Monthly Finance Report - ${report.monthLabel}`,
     text: [
@@ -83,10 +97,7 @@ module.exports.sendMonthlyReportEmail = async (email, report) => {
 };
 
 module.exports.sendWelcomeEmail = async (email, fullName) => {
-  const transporter = createTransporter();
-
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+  await sendBrevoEmail({
     to: email,
     subject: "Welcome to Finance Tracker 🎉",
     html: `
@@ -114,13 +125,10 @@ module.exports.sendWelcomeEmail = async (email, fullName) => {
 };
 
 module.exports.sendForgotPasswordEmail = async (email, resetLink) => {
-  const transporter = createTransporter();
-  
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+  await sendBrevoEmail({
     to: email,
     subject: "Password Reset Request",
-      html: `
+    html: `
         <h1>Password Reset Request</h1>
         <p>We received a request to reset your password. Click the link below to set a new password:</p>
         <a href="${resetLink}"
@@ -134,5 +142,5 @@ module.exports.sendForgotPasswordEmail = async (email, resetLink) => {
         </a>
         <p>If you did not request a password reset, please ignore this email.</p>
     `,
-    });
-}
+  });
+};
